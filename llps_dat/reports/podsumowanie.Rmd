@@ -1,0 +1,199 @@
+---
+title: "Podsumowanie"
+author: "Krtystyna Grzesiak"
+output: md_document
+---
+
+## Podsumowanie danych
+
+- liczba obserwacji: 3498 (2951 negatywnych i 547 pozytywnych),
+
+- liczba obserwacji w zbiorze treningowym: 3148 (2655 negatywnych i 493 pozytywnych),
+
+- liczba obserwacji w zbiorze testowym: 350 (296 negatywnych i 54 pozytywnych).
+
+- przestrzeń k-merowa: k-mery o długości od 1 do 3 z przerwami do łącznej długości maksymalnie 10
+
+- liczba zmiennych: 226 013
+
+## Benchmark Michała
+
+![benchmark narzędzi do predykcji llps (czerwone modele Michała)](michal.png)
+
+
+## Ranking z testów brzegowych (korelacje Pearsona)
+
+Wybieramy pierwsze X zmiennych na podstawie rankingu opartego o testy na korelację. 
+
+#### Wyniki AUC:
+
+| models       | X100      | X1000     | X3000     | X5000     |
+|--------------|-----------|-----------|-----------|-----------|
+| lasso        | 0.7065190 | 0.7085836 | 0.7136512 | 0.7105856 |
+| elastic net  | 0.7030468 | 0.6910661 | 0.6905656 | 0.7018268 |
+| ridge        | 0.6901589 | 0.5439189 | 0.5513013 | NA        |
+| slope        | 0.7129630 | 0.7145896 | 0.7223473 | 0.7277277 |
+
+
+- ridge działa najgorzej - przy większej liczbie zmiennych bardzo długo trzeba czekać na wynik
+
+- najlepiej działa SLOPE, ale różnice pomiędzy SLOPE i LASSO są niewielkie 
+
+#### Wyniki FPR
+
+| models       | X100      | X1000     | X3000     | X5000     |
+|--------------|-----------|-----------|-----------|-----------|
+| lasso        | 0.0337 | 0.0337 | 0.0304 | 0.0304 |
+| elastic net  | 0.0371 | 0.0506 | 0.0506 | 0.0506 |
+| ridge        | 0.0439 | 0.0810 | 0.0810 | NA        |
+| slope        | 0.0304 | 0.0270 | 0.0202 | 0.0236 |
+
+- LASSO wybiera najmniej zmiennych, SLOPE wybiera mniej więcej 2x tyle (w poniższej tabeli liczba niezerowych zmiennych)
+
+| models       | X100 | X1000 | X3000 | X5000 |
+|--------------|------|-------|-------|-------|
+| lasso        | 47   | 105   | 158   | 196   |
+| elastic net  | 58   | 256   | 423   | 535   |
+| slope        | 65   | 205   | 372   | 446   |
+
+
+
+
+![histogram niezerowych współczynników LASSO](LASSO_coefs.png)
+
+![histogram niezerowych współczynników SLOPE](slope_coefs.png)
+
+
+## mbic2 i stepwise
+
+mbic2 ze stepwisem na zbiorze k-merów wstępnie przefiltrowanych testami brzegowymi z thresholdem 0.2 (trochę ponad 100 000 k-merów) wybiera 12 k-merów:
+
+```{r}
+readRDS("../mbic_vars.RDS")
+```
+
+### zmienne z mbic2
+
+$$FPR = \dfrac{FP}{FP + TN}$$
+
+- **logistyczny GLM** ma tym zbiorze ma AUC: 0.697, FPR: 0.054. To jest porównywalny wynik do modelu k-merowego Michała,
+
+- **lasy losowe** (domyślne) AUC: 0.6994, FPR: 0.0506. (Bardzo podobnie do GLM),
+
+- **Super Learner** (domyślnie "SL.mean", "SL.glmnet", "SL.ranger") AUC: 0.6971, FPR: 0.0540,
+
+
+### mbic2 i korelacje 
+
+- szukałam k-merów skorelowanych z k-merami wybranymi przez mbic2 na poziomie korelacji co najmniej $\pm$ 0.8,
+
+- nie ma takich k-merów.
+
+
+### mbic2 i interakcje 
+
+- Buduję modele w oparciu o interakcje pomiędzy zmiennymi wybranymi przez mbic2
+- Modele dla rzędu interakcji k mają p zmiennych, gdzie 
+
+$$p = \sum_{i = 1}^k{12\choose i} +1.$$
+Dla kolejnych rzędów mamy
+
+```{r}
+cumsum(choose(12, 1:4)) + 1
+```
+
+
+Wyniki AUC:
+
+| Model       | Interakcje 2 rzędu | Interakcje 3 rzędu | Interakcje 4 rzędu |
+|-------------|--------------------|--------------------|--------------------|
+| GLM         | 0.7056             | 0.5184             | 0.5594             |
+| LASSO       | 0.7020             | 0.7004             | 0.7019             |
+| Elastic Net | 0.7015             | 0.7022             | 0.7012             |
+| Ridge       | 0.7057             | 0.6951             | 0.6873             |
+| SLOPE       | 0.7028             | 0.7017             | 0.6983             |
+
+
+Wyniki FPR:
+
+| Model       | Interakcje 2 rzędu | Interakcje 3 rzędu | Interakcje 4 rzędu |
+|-------------|--------------------|--------------------|--------------------|
+| GLM         | 0.0743             | 0.0743             | 0.2331             |
+| LASSO       | 0.0472             | 0.0472             | 0.0540             |
+| Elastic Net | 0.0540             | 0.0540             | 0.0506             |
+| Ridge       | 0.0641             | 0.0641             | 0.0709             |
+| SLOPE       | 0.0135             | 0.0135             | 0.0101             |
+
+
+
+## mAIC i stepwise
+
+```{r}
+readRDS("../maic_vars.RDS")
+```
+- Mamy tyle samo zmiennych co w przypadku mBIC2 (ale nie są to te same zmienne).
+
+- **model glm** AUC: 0.7018, FPR: 0.0472,
+- **lasy losowe** AUC: 0.7144, FPR: 0.0337,
+- **super learner**, AUC: 0.7111, FPR: 0.0405.
+
+- jest poprawa w stosunku do modelu budowanego w oparciu o zmienne z mBIC2
+
+### mAIC i interakcje
+
+
+- Tabela z AUC:
+
+| Model       | Interakcje 2 rzędu | Interakcje 3 rzędu|
+|-------------|------------------|------------------|
+| GLM         | 0.7145           | 0.5133           |
+| LASSO       | 0.7116           | 0.7092           |
+| Elastic Net | 0.7113           | 0.7097           |
+| Ridge       | 0.7152           | 0.6907           |
+| SLOPE       | 0.7142           | 0.7185           |
+
+- Dodanie interakcji 3-ciego rzędu poprawiło nieznacznie SLOPE. Reszta modeli się popsuła
+- Tabela z FPR:
+
+
+| Model       | Interakcje 2 rzędu | Interakcje 3 rzędu|
+|-------------|------------------|------------------|
+| GLM         | 0.0540           | 0.1216           |
+| LASSO       | 0.0405           | 0.0405           |
+| Elastic Net | 0.0439           | 0.0337           |
+| Ridge       | 0.0540           | 0.0472           |
+| SLOPE       | 0.0202           | 0.0202           |
+
+
+## Wybór 100 zmiennych 
+
+- testy brzegowe, 
+- fast forward
+- fast forward (500) i backward (100)
+
+
+- AUC:
+
+| models       | testy brzegowe      | fast forward     | fast forward + backward   |
+|--------------|-----------|-----------|-----------|
+| GLM        | 0.686 | 0.686 | - | 
+| random forest  | 0.7245 | 0.7262 | - | 
+| super learner        | 0.7174 | 0.7217 | - | 
+| lasso        | 0.7065190 | 0.7081 | - | 
+| elastic net  | 0.7030468 | 0.703 | - | 
+| ridge        | 0.6901589 | 0.6904 | - | 
+| slope        | 0.7129630 | 0.715 | - | 
+
+
+- FPR:
+
+| models       | testy brzegowe      | fast forward     | fast forward + backward   |
+|--------------|-----------|-----------|-----------|
+| GLM        | 0.04391892 | 0.04391892 | - | 
+| random forest  | 0.04054054 | 0.03716216 | - | 
+| super learner        | 0.03378378 | 0.03378378 | - | 
+| lasso        | 0.03716216 | 0.03378378 | - | 
+| elastic net  | 0.03716216 | 0.03716216 | - | 
+| ridge        | 0.04391892 | 0.04391892 | - | 
+| slope        | 0.02702703 | 0.02702703 | - | 
+

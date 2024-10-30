@@ -206,7 +206,7 @@ auc(test_y, predicted)
 
 get_interactions_design <- function(y, x) {
   lm_model <- lm(y~ (.)^2, data = data.frame(x))
-  model.matrix(lm_model)
+  model.matrix(lm_model)[, -1]
 }
 
 source("llps_dat/sparse_cor.R")
@@ -597,7 +597,7 @@ confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 #### random forest
 
 model_rf_small <- ranger(train_y ~ .,
-                         data = train_x_reduced,
+                         data = cbind(train_y, train_x_reduced),
                          probability = TRUE)
 
 predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
@@ -615,7 +615,10 @@ sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
 
 
 predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
-
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 ################################################################################
 ################################################################################
@@ -700,22 +703,131 @@ auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 
-################# fast forward
+################# STEPWISE Maic
 
 
-dat <- prepare_data(train_y, train_x)
+# dat <- prepare_data(train_y, train_x)
 
-dat_reduced <- dat %>%
-  reduce_matrix(minpv = 0.2)
+reduced_02 <- readRDS("llps_dat/reduced_02.RDS")
 
-res_maic <- dat_reduced %>%
-  fast_forward(crit = "maic")
+dat <- prepare_data(train_y, train_x[, reduced_02])
+
+# dat_reduced <- dat %>%
+#   reduce_matrix(minpv = 0.2)
+# res_maic <- dat %>%
+#   stepwise(crit = "maic")
+# saveRDS(res_maic[["model"]], "llps_dat/maic_vars.RDS")
+
+chosen_kmers <- readRDS("../maic_vars.RDS")
+  
+train_x_reduced <- as.matrix(train_x[, chosen_kmers])
+test_x_reduced <- as.matrix(test_x[, chosen_kmers])
+
+#glm
+
+logistic_model <- glm(train_y~., data = as.data.frame(train_x_reduced), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(test_x_reduced), type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+#### random forest
+
+model_rf_small <- ranger(train_y ~ .,
+                         data = cbind(train_y, train_x_reduced),
+                         probability = TRUE)
+
+predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+#### superlearner
+
+library(SuperLearner)
+
+sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
+                   SL.library = c("SL.mean", "SL.glmnet", "SL.ranger"))
 
 
-saveRDS(res_maic[["model"]], "llps_dat/maic_vars.RDS")
+predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+#############################################################################
 
 
 res_aic <- dat_reduced %>%
   fast_forward(crit = "aic")
 
 saveRDS(res_aic[["model"]], "llps_dat/aic_vars.RDS")
+
+
+
+################################################################################
+################################################################################
+#################################### 31-10-2024 ################################
+################################################################################
+################################################################################
+
+AUC_and_FPR <- function(test_y, predicted){
+  rocobj <- roc(test_y, predicted)
+  print(ggroc(rocobj))
+  print("AUC:")
+  print(auc(test_y, predicted))
+  mat <- confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+  print(mat)
+  print("FPR")
+  print(mat$table[2, 1]/(mat$table[2, 1] + mat$table[1, 1]))
+}
+
+
+reduced_02 <- readRDS("llps_dat/reduced_02.RDS")
+dat <- prepare_data(train_y, train_x[, reduced_02])
+
+
+#### wybieramy tylko z testów brzegowych
+
+
+ranking <- readRDS("llps_dat/ranking.RDS")
+candidates <- ranking[1:100]
+
+train_x_reduced <- as.matrix(train_x[, candidates])
+test_x_reduced <- as.matrix(test_x[, candidates])
+
+# definiuję nowe kryterium (RSS)
+
+crit_RSS <- function(loglik, n, ...) exp(-(2/n) * loglik + log(n))
+
+
+## Wybór 100 zmiennych fast forward (RSS)
+
+model_100_ff <- dat %>%
+  fast_forward(crit = crit_RSS, maxf = 100)
+
+candidates <- model_100_ff$model
+
+
+
+## Wybór 100 zmiennych fast forward + backward (RSS)
+
+
+model_100_fb <- dat %>%
+  fast_forward(crit = crit_RSS, maxf = 500) %>% 
+  backward(crit = crit_RSS)
+
+candidates <- model_100_ff$model
+
+
+
+
+
+
+
+
+

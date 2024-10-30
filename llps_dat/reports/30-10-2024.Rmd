@@ -1,0 +1,294 @@
+---
+title: "30-10-2024"
+author: "Krtystyna Grzesiak"
+output: md_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+
+library(biogram)
+library(seqR)
+library(ranger)
+library(bigstep)
+library(boot)
+library(pROC)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(glmnet)
+library(tidyr)
+library(SLOPE)
+library(ggcorrplot)
+library(knitr)
+
+inv_logit <- function(xb) exp(xb)/(1 + exp(xb))
+
+df <- read.table("../llps_ml_dataset.csv", sep = "\t", header = TRUE)
+train_ids <- df[["Fold"]] == "Train"
+test_ids <- df[["Fold"]] == "Test"
+
+
+### kmer space
+
+all_three_gaps <- expand.grid(0L:6, 0L:6)
+gaps_shorter_than6 <- all_three_gaps[rowSums(all_three_gaps) <= 6, ]
+
+k_vector_raw <- c(1, 2, 2, 2, 2, 2, rep(3, nrow(gaps_shorter_than6)))
+kmer_gaps_raw <- c(list(NULL, 
+                        NULL, c(1), c(2), c(3), c(4)),
+                   lapply(1L:nrow(gaps_shorter_than6), function(i)
+                     unlist(gaps_shorter_than6[i, ], use.names = FALSE)))
+
+kmers <- count_multimers(
+  df[["Full.seq"]],
+  k_vector = k_vector_raw,
+  kmer_gaps = kmer_gaps_raw,
+  with_kmer_counts = FALSE,
+  batch_size = 4)
+
+######
+
+y <- !(df[["Datasets"]] %in% c("PDB", "DisProt"))
+
+train_y <- as.numeric(y[train_ids])
+train_x <- data.frame((as.matrix(kmers[train_ids, ])))
+
+test_y <- as.numeric(y[test_ids])
+test_x <- data.frame((as.matrix(kmers[test_ids, ])))
+
+AUC_and_FPR <- function(test_y, predicted){
+  rocobj <- roc(test_y, predicted)
+  auc_val <- auc(test_y, predicted)
+  print(ggroc(rocobj))
+  print("AUC:")
+  print(auc_val)
+  mat <- confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+  print(mat)
+  print("FPR")
+  print(mat$table[2, 1]/(mat$table[2, 1] + mat$table[1, 1]))
+}
+
+```
+
+
+
+## Wybór 100 zmiennych testami brzegowymi
+
+```{r}
+ranking <- readRDS("../ranking.RDS")
+candidates <- ranking[1:100]
+
+train_x_reduced <- as.matrix(train_x[, candidates])
+test_x_reduced <- as.matrix(test_x[, candidates])
+
+# glm
+
+logistic_model <- glm(train_y~., data = as.data.frame(train_x_reduced), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(test_x_reduced), type = "response")
+AUC_and_FPR(test_y, predicted)
+
+#### random forest
+
+model_rf_small <- ranger(train_y ~ .,
+                         data = cbind(train_y, train_x_reduced),
+                         probability = TRUE)
+
+predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
+AUC_and_FPR(test_y, predicted)
+
+#### superlearner
+
+library(SuperLearner)
+
+sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
+                   SL.library = c("SL.mean", "SL.glmnet", "SL.ranger"))
+
+
+predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
+AUC_and_FPR(test_y, predicted)
+
+
+# LASSO
+
+lasso_cv <- cv.glmnet(train_x_reduced, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(train_x_reduced, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+AUC_and_FPR(test_y, predicted)
+
+
+
+# elastic net
+
+elastic_net <- glmnet(train_x_reduced, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+AUC_and_FPR(test_y, predicted)
+
+
+# ridge
+
+ridge <- glmnet(train_x_reduced, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+AUC_and_FPR(test_y, predicted)
+
+## slope
+
+res_slope <- SLOPE(train_x_reduced, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(test_x_reduced), type = "response")
+
+AUC_and_FPR(test_y, predicted)
+
+```
+
+
+## Wybór 100 zmiennych fast forward (RSS)
+
+```{r, message=FALSE, warning=FALSE}
+# definiuję nowe kryterium (RSS)
+
+crit_RSS <- function(loglik, n, ...) exp(-(2/n) * loglik + log(n))
+
+
+## Wybór 100 zmiennych fast forward (RSS)
+
+reduced_02 <- readRDS("../reduced_02.RDS")
+dat <- prepare_data(train_y, train_x[, reduced_02])
+
+model_100_ff <- dat %>%
+  fast_forward(crit = crit_RSS, maxf = 100)
+```
+
+
+```{r}
+candidates <- model_100_ff$model
+
+train_x_reduced <- as.matrix(train_x[, candidates])
+test_x_reduced <- as.matrix(test_x[, candidates])
+
+# glm
+
+logistic_model <- glm(train_y~., data = as.data.frame(train_x_reduced), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(test_x_reduced), type = "response")
+AUC_and_FPR(test_y, predicted)
+
+#### random forest
+
+model_rf_small <- ranger(train_y ~ .,
+                         data = cbind(train_y, train_x_reduced),
+                         probability = TRUE)
+
+predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
+AUC_and_FPR(test_y, predicted)
+
+#### superlearner
+
+library(SuperLearner)
+
+sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
+                   SL.library = c("SL.mean", "SL.glmnet", "SL.ranger"))
+
+
+predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
+AUC_and_FPR(test_y, predicted)
+
+
+# LASSO
+
+lasso_cv <- cv.glmnet(train_x_reduced, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(train_x_reduced, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+AUC_and_FPR(test_y, predicted)
+
+
+
+# elastic net
+
+elastic_net <- glmnet(train_x_reduced, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+AUC_and_FPR(test_y, predicted)
+
+
+# ridge
+
+ridge <- glmnet(train_x_reduced, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+AUC_and_FPR(test_y, predicted)
+
+## slope
+
+res_slope <- SLOPE(train_x_reduced, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(test_x_reduced), type = "response")
+
+AUC_and_FPR(test_y, predicted)
+
+```
+
+
+
+- AUC:
+
+| models       | testy brzegowe      | fast forward     | fast forward + backward   |
+|--------------|-----------|-----------|-----------|
+| GLM        | 0.686 | 0.686 | - | 
+| random forest  | 0.7245 | 0.7262 | - | 
+| super learner        | 0.7174 | 0.7217 | - | 
+| lasso        | 0.7065190 | 0.7081 | - | 
+| elastic net  | 0.7030468 | 0.703 | - | 
+| ridge        | 0.6901589 | 0.6904 | - | 
+| slope        | 0.7129630 | 0.715 | - | 
+
+
+- FPR:
+
+| models       | testy brzegowe      | fast forward     | fast forward + backward   |
+|--------------|-----------|-----------|-----------|
+| GLM        | 0.04391892 | 0.04391892 | - | 
+| random forest  | 0.04054054 | 0.03716216 | - | 
+| super learner        | 0.03378378 | 0.03378378 | - | 
+| lasso        | 0.03716216 | 0.03378378 | - | 
+| elastic net  | 0.03716216 | 0.03716216 | - | 
+| ridge        | 0.04391892 | 0.04391892 | - | 
+| slope        | 0.02702703 | 0.02702703 | - | 

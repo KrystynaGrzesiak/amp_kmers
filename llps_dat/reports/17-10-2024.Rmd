@@ -625,6 +625,8 @@ auc_rr5000 <- NA
 res_slope <- SLOPE(train_x_reduced, train_y, family = "binomial", 
                    lambda = "bh", alpha = 0.006)
 
+hist(coefficients(res_slope))
+
 
 predicted <- predict(res_slope, as.matrix(test_x_reduced), type = "response")
 
@@ -735,30 +737,48 @@ confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 
 ```{r}
-# #### random forest
-# 
-# model_rf_small <- ranger(train_y ~ .,
-#                          data = train_x_reduced,
-#                          probability = TRUE)
-# 
-# predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
-# rocobj <- roc(test_y, predicted)
-# ggroc(rocobj)
-# auc(test_y, predicted)
-# confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+#### random forest
+
+model_rf_small <- ranger(train_y ~ .,
+                         data = cbind(train_y, train_x_reduced),
+                         probability = TRUE)
+
+predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 ```
 
 
 ```{r}
-# #### superlearner
+
+### super learner
+
+
+library(SuperLearner)
+
+sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
+                  SL.library = c("SL.mean", "SL.glmnet", "SL.ranger"))
+
+
+predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+# data.frame(x = slope_coefs[slope_coefs> 0]) %>%
+#   ggplot(aes(x = x)) +
+#   geom_histogram(bins = 30) +
+#   ggtitle("SLOPE coefficients")
 # 
-# library(SuperLearner)
-# 
-# sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
-#                   SL.library = c("SL.mean", "SL.glmnet", "SL.ranger"))
-# 
-# 
-# predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
+# data.frame(x = lasso_coefs [lasso_coefs > 0]) %>%
+#   ggplot(aes(x = x)) +
+#   geom_histogram(bins = 30) +
+#   ggtitle("LASSO coefficients")
+
+
 ```
 
 

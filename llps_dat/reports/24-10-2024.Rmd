@@ -84,6 +84,11 @@ test_x <- data.frame((as.matrix(kmers[test_ids, ])))
 
 ```{r}
 
+get_interactions_design <- function(y, x) {
+  lm_model <- lm(y~ (.)^2, data = data.frame(x))
+  model.matrix(lm_model)
+}
+
 get_interactions_design_3 <- function(y, x) {
   lm_model <- lm(y~ (.)^3, data = data.frame(x))
   model.matrix(lm_model)
@@ -98,6 +103,14 @@ test_x_reduced <- as.matrix(test_x[, chosen_kmers])
 design_matrix_train <- get_interactions_design_3(train_y, train_x_reduced)
 design_matrix_test <- get_interactions_design_3(test_y, test_x_reduced)
 
+# GLM
+
+logistic_model <- glm(train_y~., data = as.data.frame(design_matrix_train), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(design_matrix_test), type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 # LASSO
 
@@ -173,6 +186,15 @@ get_interactions_design_4 <- function(y, x) {
 design_matrix_train <- get_interactions_design_4(train_y, train_x_reduced)
 design_matrix_test <- get_interactions_design_4(test_y, test_x_reduced)
 
+# GLM
+
+logistic_model <- glm(train_y~., data = as.data.frame(design_matrix_train), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(design_matrix_test), type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
 
 # LASSO
 
@@ -236,7 +258,7 @@ confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 ```
 
 
-### MAIC fast forward
+### MAIC stepwise
 
 #### Wybrane kmery
 
@@ -249,11 +271,144 @@ test_x_reduced <- as.matrix(test_x[, chosen_kmers])
 
 ```
 
+#### tylko te k-mery
+
+```{r}
+chosen_kmers <- readRDS("../maic_vars.RDS")
+  
+train_x_reduced <- as.matrix(train_x[, chosen_kmers])
+test_x_reduced <- as.matrix(test_x[, chosen_kmers])
+
+# glm
+
+logistic_model <- glm(train_y~., data = as.data.frame(train_x_reduced), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(test_x_reduced), type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+#### random forest
+
+model_rf_small <- ranger(train_y ~ .,
+                         data = cbind(train_y, train_x_reduced),
+                         probability = TRUE)
+
+predicted <- predict(model_rf_small, test_x_reduced)[["predictions"]][, 1]
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+#### superlearner
+
+library(SuperLearner)
+
+sl <- SuperLearner(Y = train_y, X = train_x_reduced, family = binomial(),
+                   SL.library = c("SL.mean", "SL.glmnet", "SL.ranger"))
+
+
+predicted <- as.vector(unlist(predict(sl, test_x_reduced)$pred))
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+```
+
+
+#### interakcje 2 rzędu
+
+```{r}
+
+design_matrix_train <- get_interactions_design(train_y, train_x_reduced)
+design_matrix_test <- get_interactions_design(test_y, test_x_reduced)
+
+# GLM
+
+logistic_model <- glm(train_y~., data = as.data.frame(design_matrix_train), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(design_matrix_test), type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+# LASSO
+
+lasso_cv <- cv.glmnet(design_matrix_train, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(design_matrix_train, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+rocobj <- roc(test_y, as.vector(predicted))
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+
+# elastic net
+
+elastic_net <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+# ridge
+
+ridge <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+## slope
+
+res_slope <- SLOPE(design_matrix_train, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(design_matrix_test), type = "response")
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+```
+
+#### interakcje 3 rzędu
 
 ```{r}
 
 design_matrix_train <- get_interactions_design_3(train_y, train_x_reduced)
 design_matrix_test <- get_interactions_design_3(test_y, test_x_reduced)
+
+# GLM
+
+logistic_model <- glm(train_y~., data = as.data.frame(design_matrix_train), family = "binomial")
+predicted <- predict(logistic_model, as.data.frame(design_matrix_test), type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 
 # LASSO
@@ -393,3 +548,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 ```
+
+
+
+
