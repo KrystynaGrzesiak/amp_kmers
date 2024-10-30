@@ -292,6 +292,7 @@ auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 auc_lasso100 <- auc(test_y, predicted)
+nonzero_lasso100 <- sum(coefficients(lasso_res) != 0)
 ```
 
 #### Elastic Net
@@ -311,6 +312,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_en100 <- auc(test_y, predicted)
+nonzero_en100 <- sum(coefficients(elastic_net) != 0)
 ```
 
 #### Elastic Net
@@ -348,6 +350,7 @@ auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 auc_s100 <- auc(test_y, predicted)
+nonzero_s100 <- sum(coefficients(res_slope) != 0)
 ```
 
 
@@ -384,6 +387,7 @@ auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 auc_lasso1000 <- auc(test_y, predicted)
+nonzero_lasso1000 <- sum(coefficients(lasso_res) != 0)
 ```
 
 #### Elastic Net
@@ -403,6 +407,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_en1000 <- auc(test_y, predicted)
+nonzero_en1000 <- sum(coefficients(elastic_net) != 0)
 ```
 
 #### Elastic Net
@@ -440,6 +445,7 @@ auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 auc_s1000 <- auc(test_y, predicted)
+nonzero_s1000 <- sum(coefficients(res_slope) != 0)
 ```
 
 
@@ -476,6 +482,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_lasso3000 <- auc(test_y, predicted)
+nonzero_lasso3000 <- sum(coefficients(lasso_res) != 0)
 ```
 
 #### Elastic net
@@ -495,6 +502,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_en3000 <- auc(test_y, predicted)
+nonzero_en3000 <- sum(coefficients(elastic_net) != 0)
 ```
 
 #### ridge
@@ -533,6 +541,7 @@ auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 
 auc_s3000 <- auc(test_y, predicted)
+nonzero_s3000 <- sum(coefficients(res_slope) != 0)
 ```
 
 
@@ -570,6 +579,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_lasso5000 <- auc(test_y, predicted)
+nonzero_lasso5000 <- sum(coefficients(lasso_res) != 0)
 ```
 
 #### Elastic net
@@ -589,7 +599,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_en5000 <- auc(test_y, predicted)
-
+nonzero_en5000 <- sum(coefficients(elastic_net) != 0)
 
 # ridge
 
@@ -623,6 +633,7 @@ ggroc(rocobj)
 auc(test_y, predicted)
 confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
 auc_s5000 <- auc(test_y, predicted)
+nonzero_s5000 <- sum(coefficients(res_slope) != 0)
 ```
 
 
@@ -658,6 +669,12 @@ data.frame(models = c("lasso", "elastic net", "ridge", "slope"),
            `5000` = c(auc_lasso5000, auc_en5000, auc_rr5000, auc_s5000)) %>% 
   kable()
 
+data.frame(models = c("lasso", "elastic net", "slope"),
+           `100` = c(nonzero_lasso100, nonzero_en100, nonzero_s100),
+           `1000` = c(nonzero_lasso1000, nonzero_en1000, nonzero_s1000),
+           `3000` = c(nonzero_lasso3000, nonzero_en3000, nonzero_s3000),
+           `5000` = c(nonzero_lasso5000, nonzero_en5000, nonzero_s5000)) %>% 
+  kable()
 
 ```
 
