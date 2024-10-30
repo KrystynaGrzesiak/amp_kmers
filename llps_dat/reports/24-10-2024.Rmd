@@ -1,0 +1,395 @@
+---
+title: "17-10-2024"
+author: "Krtystyna Grzesiak"
+output: html_document
+---
+
+```{r setup, include=FALSE,  echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+1. Obniżyć kryterium IC , moze zrobić fast forward
+- mAIC
+
+2. Rozszerzyć przestrzeń k-merów
+
+2. Spróbować interakcje rzędu 3 i 4 i może więcej
+
+3. Zrobić porównanie - wybór najlepszych zmiennych i porównanie co się będzie potem działo 
+- czy mbic2 wybiera najlepsze zmienne?
+
+2. * Spróbować z wagami żeby zbalansować (zobaczyć) - data augmantation, oversampling
+
+### Pomysły:
+
+1. Zrobić ranking z fast forward, wybierać zmienne w oparciu o ranking
+
+```{r, echo=FALSE}
+
+library(biogram)
+library(seqR)
+library(ranger)
+library(bigstep)
+library(boot)
+library(pROC)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(glmnet)
+library(tidyr)
+library(SLOPE)
+library(ggcorrplot)
+library(knitr)
+
+inv_logit <- function(xb) exp(xb)/(1 + exp(xb))
+
+df <- read.table("../llps_ml_dataset.csv", sep = "\t", header = TRUE)
+train_ids <- df[["Fold"]] == "Train"
+test_ids <- df[["Fold"]] == "Test"
+
+
+### kmer space
+
+all_three_gaps <- expand.grid(0L:6, 0L:6)
+gaps_shorter_than6 <- all_three_gaps[rowSums(all_three_gaps) <= 6, ]
+
+k_vector_raw <- c(1, 2, 2, 2, 2, 2, rep(3, nrow(gaps_shorter_than6)))
+kmer_gaps_raw <- c(list(NULL, 
+                        NULL, c(1), c(2), c(3), c(4)),
+                   lapply(1L:nrow(gaps_shorter_than6), function(i)
+                     unlist(gaps_shorter_than6[i, ], use.names = FALSE)))
+
+kmers <- count_multimers(
+  df[["Full.seq"]],
+  k_vector = k_vector_raw,
+  kmer_gaps = kmer_gaps_raw,
+  with_kmer_counts = FALSE,
+  batch_size = 4)
+
+######
+
+y <- !(df[["Datasets"]] %in% c("PDB", "DisProt"))
+
+train_y <- as.numeric(y[train_ids])
+train_x <- data.frame((as.matrix(kmers[train_ids, ])))
+
+test_y <- as.numeric(y[test_ids])
+test_x <- data.frame((as.matrix(kmers[test_ids, ])))
+
+```
+
+
+### Interakcje 3. rzędu
+
+```{r}
+
+get_interactions_design_3 <- function(y, x) {
+  lm_model <- lm(y~ (.)^3, data = data.frame(x))
+  model.matrix(lm_model)
+}
+
+
+chosen_kmers <- readRDS("../mbic_vars.RDS")
+
+train_x_reduced <- as.matrix(train_x[, chosen_kmers])
+test_x_reduced <- as.matrix(test_x[, chosen_kmers])
+
+design_matrix_train <- get_interactions_design_3(train_y, train_x_reduced)
+design_matrix_test <- get_interactions_design_3(test_y, test_x_reduced)
+
+
+# LASSO
+
+lasso_cv <- cv.glmnet(design_matrix_train, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(design_matrix_train, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+rocobj <- roc(test_y, as.vector(predicted))
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+
+# elastic net
+
+elastic_net <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+# ridge
+
+ridge <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+## slope
+
+res_slope <- SLOPE(design_matrix_train, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(design_matrix_test), type = "response")
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+```
+
+### Interakcja 4. rzędu
+
+
+```{r}
+
+get_interactions_design_4 <- function(y, x) {
+  lm_model <- lm(y~ (.)^4, data = data.frame(x))
+  model.matrix(lm_model)
+}
+
+design_matrix_train <- get_interactions_design_4(train_y, train_x_reduced)
+design_matrix_test <- get_interactions_design_4(test_y, test_x_reduced)
+
+
+# LASSO
+
+lasso_cv <- cv.glmnet(design_matrix_train, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(design_matrix_train, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+rocobj <- roc(test_y, as.vector(predicted))
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+
+# elastic net
+
+elastic_net <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+# ridge
+
+ridge <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+## slope
+
+res_slope <- SLOPE(design_matrix_train, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(design_matrix_test), type = "response")
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+```
+
+
+### MAIC fast forward
+
+#### Wybrane kmery
+
+```{r}
+
+chosen_kmers <- readRDS("../maic_vars.RDS")
+
+train_x_reduced <- as.matrix(train_x[, chosen_kmers])
+test_x_reduced <- as.matrix(test_x[, chosen_kmers])
+
+```
+
+
+```{r}
+
+design_matrix_train <- get_interactions_design_3(train_y, train_x_reduced)
+design_matrix_test <- get_interactions_design_3(test_y, test_x_reduced)
+
+
+# LASSO
+
+lasso_cv <- cv.glmnet(design_matrix_train, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(design_matrix_train, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+rocobj <- roc(test_y, as.vector(predicted))
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+
+# elastic net
+
+elastic_net <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+# ridge
+
+ridge <- glmnet(design_matrix_train, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(design_matrix_test), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+## slope
+
+res_slope <- SLOPE(design_matrix_train, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(design_matrix_test), type = "response")
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+```
+
+
+### AIC fast forward
+
+
+```{r}
+
+chosen_kmers <- readRDS("../aic_vars.RDS")
+
+train_x_reduced <- as.matrix(train_x[, chosen_kmers])
+test_x_reduced <- as.matrix(test_x[, chosen_kmers])
+
+```
+
+
+```{r}
+
+# LASSO
+
+lasso_cv <- cv.glmnet(train_x_reduced, train_y, family = "binomial")
+
+lambda_min <- lasso_cv$lambda.min
+
+lasso_res <- glmnet(train_x_reduced, train_y, family = "binomial",
+                    lambda = lambda_min, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(lasso_res, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(inv_logit(predicted))
+
+rocobj <- roc(test_y, as.vector(predicted))
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+
+# elastic net
+
+elastic_net <- glmnet(train_x_reduced, train_y, family = "binomial", 
+                      alpha = 0.5, lambda = lambda_min, thresh = 10^(-10), 
+                      maxit = 10^(8))
+
+predicted <- predict.glmnet(elastic_net, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+
+# ridge
+
+ridge <- glmnet(train_x_reduced, train_y, family = "binomial", 
+                lambda = lambda_min, alpha = 0, thresh = 10^(-10), maxit = 10^(8))
+
+predicted <- predict.glmnet(ridge, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- as.vector(apply(predicted, 2, inv_logit))
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+## slope
+
+res_slope <- SLOPE(train_x_reduced, train_y, family = "binomial", 
+                   lambda = "bh", alpha = 0.01)
+
+
+predicted <- predict(res_slope, as.matrix(test_x_reduced), type = "response")
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+```

@@ -1,0 +1,230 @@
+---
+title: "Untitled"
+author: "Krtystyna Grzesiak"
+output: html_document
+---
+
+```{r setup, include=FALSE,  echo = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### LLPS data
+
+
+```{r echo = FALSE, warning=FALSE, message=FALSE}
+library(biogram)
+library(seqR)
+library(ranger)
+library(bigstep)
+library(boot)
+library(pROC)
+library(ggplot2)
+library(caret)
+library(dplyr)
+library(glmnet)
+library(tidyr)
+library(SLOPE)
+
+df <- read.table("llps_ml_dataset.csv", sep = "\t", header = TRUE)
+train_ids <- df[["Fold"]] == "Train"
+test_ids <- df[["Fold"]] == "Test"
+```
+
+Dimensions:
+
+```{r  echo = FALSE}
+dim(df)
+```
+
+Train / Test
+
+```{r  echo = FALSE}
+table(df$Fold)
+```
+
+
+
+```{r  echo = FALSE}
+df %>% 
+  mutate(positive = !(Datasets %in% c("PDB", "DisProt"))) %>% 
+  group_by(positive, Fold) %>% 
+  reframe(n = n())
+```
+
+
+### K-mer space:
+
+k-mer properties:
+
+```{r pressure, echo=FALSE}
+all_three_gaps <- expand.grid(0L:6, 0L:6)
+gaps_shorter_than6 <- all_three_gaps[rowSums(all_three_gaps) <= 6, ]
+
+k_vector_raw <- c(1, 2, 2, 2, 2, 2, rep(3, nrow(gaps_shorter_than6)))
+kmer_gaps_raw <- c(list(NULL, 
+                        NULL, c(1), c(2), c(3), c(4)),
+                   lapply(1L:nrow(gaps_shorter_than6), function(i)
+                     unlist(gaps_shorter_than6[i, ], use.names = FALSE)))
+
+data.frame(length = k_vector_raw, 
+           gaps = unlist(lapply(kmer_gaps_raw, function(i) paste0(i, collapse = ""))))
+```
+
+
+k-mer data:
+
+```{r,  echo=FALSE}
+kmers <- count_multimers(
+  df[["Full.seq"]],
+  k_vector = k_vector_raw,
+  kmer_gaps = kmer_gaps_raw,
+  with_kmer_counts = FALSE,
+  batch_size = 4)
+
+dim(kmers)
+```
+
+
+### mbic2 results:
+
+```{r, echo = FALSE}
+chosen_kmers <- readRDS("C:/gits/amp_kmers/llps_dat/mbic_vars.RDS")
+chosen_kmers
+```
+
+
+```{r, echo = FALSE}
+y <- !(df[["Datasets"]] %in% c("PDB", "DisProt"))
+
+train_y <- as.numeric(y[train_ids])
+train_x <- data.frame((as.matrix(kmers[train_ids, ])))
+test_y <- as.numeric(y[test_ids])
+test_x <- data.frame((as.matrix(kmers[test_ids, chosen_kmers])))
+```
+
+### Logistic model:
+
+```{r, echo = FALSE}
+train_filtered <- train_x[, chosen_kmers]
+logistic_model <- glm(train_y~., data = train_filtered, family = "binomial")
+predicted <- predict(logistic_model, test_x, type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+```
+
+```{r}
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+cv_result <- cv.glm(data = cbind(train_y, train_filtered), 
+                    glmfit = logistic_model, K = 10)
+cv_result$delta 
+```
+
+
+
+### Logistic model with all two-way interactions:
+
+```{r, echo = FALSE}
+logistic_model <- glm(train_y~(.)^2, data = train_filtered, family = "binomial")
+predicted <- predict(logistic_model, test_x, type = "response")
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+```
+
+
+```{r}
+confusionMatrix(as.factor(as.numeric(predicted > 0.5)), as.factor(test_y))
+
+cv_result <- cv.glm(data = cbind(train_y, train_filtered), 
+                    glmfit = logistic_model, K = 10)
+cv_result$delta 
+```
+
+
+### Preliminary filtering via Pearson correlation tests
+
+
+```{r}
+candidates <- readRDS("reduced_02.RDS")
+
+length(candidates)
+```
+### LASSO model
+
+```{r}
+# dat <- prepare_data(train_y, train_x, type = "logistic") 
+
+# dat_reduced <- dat %>% 
+#   reduce_matrix(minpv = 0.2) # to się długo liczy
+
+# saveRDS(dat_reduced$candidates, "llps_dat/reduced_02.RDS")
+
+candidates <- readRDS("reduced_02.RDS")
+
+train_x_reduced <- train_x[, candidates]
+test_x_reduced <- data.frame((as.matrix(kmers[test_ids, candidates])))
+
+# res_lasso <- glmnet(train_x_reduced, train_y, family = "binomial") # to się liczy chwile
+# saveRDS(res_lasso, "lasso_results.RDS")
+
+res_lasso <- readRDS("lasso_results.RDS")
+# cv_lasso_res <- cv.glmnet(train_x_reduced, train_y, family = "binomial") # za długie to jest
+
+inv_logit <- function(xb) exp(xb)/(1 + exp(xb))
+
+predicted <- predict.glmnet(res_lasso, newx = as.matrix(test_x_reduced), type = "response")
+predicted <- apply(predicted, 2, inv_logit)
+
+dt_coefs <- data.frame(as.matrix(coef.glmnet(res_lasso))) 
+
+lambda_df <- data.frame(path = names(res_lasso$a0), lambda = res_lasso$lambda)
+
+dt_coefs <- dt_coefs %>% 
+  mutate(beta = rownames(dt_coefs)) %>% 
+  tidyr::gather(path, estimator, -beta) %>% 
+  left_join(lambda_df, by = "path")
+
+dt_coefs %>% 
+  filter(beta %in% chosen_kmers) %>% 
+  ggplot(aes(x = lambda, y = estimator, group_by(beta), col = beta)) +
+  geom_line()
+
+aucs <- sapply(1:ncol(predicted), function(ith_lambda) {
+  predicted_single_lambda <- predicted[, ith_lambda]
+  auc(test_y, predicted_single_lambda)
+})
+
+data.frame(auc = aucs,
+           lambda = res_lasso$lambda) %>% 
+  ggplot(aes(x = lambda, y = auc)) +
+  geom_line() +
+  scale_x_reverse()
+
+predicted_single_lambda <- predicted[, 100]
+rocobj <- roc(test_y, predicted_single_lambda)
+ggroc(rocobj)
+auc(test_y, predicted_single_lambda)
+
+sum(coef.glmnet(res_lasso)[, 100] != 0)
+
+
+confusionMatrix(as.factor(as.numeric(predicted_single_lambda > 0.5)), as.factor(test_y))
+
+```
+
+
+### SLOPE
+
+```{r}
+res_slope <- readRDS("res_slope.RDS")
+
+predicted <- predict(res_slope, as.matrix(test_x_reduced), type = "response")
+
+rocobj <- roc(test_y, predicted)
+ggroc(rocobj)
+auc(test_y, predicted)
+```
+
+

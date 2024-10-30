@@ -1,0 +1,14 @@
+1. Metody nieliniowe
+- lasy losowe, XGboost, sieci neuronowe, superlearner
+- na zniorze cech z mbic2 (bez interakcji)
+- na zbiorze z korelacjami z mbic (zrobić glm i ridge, LASSO, SLOPE jeśli p>50) 
+
+2. LASSO, sLOPE, ridge, elastic net
+- na zbiorze z interakcjami 
+- na zbiorze z korelacjami z mbic + ewentualnie interakcje
+
+
+3. Dużo większa liczba zmiennych, np. 1000, 3000, 5000 (wybrane testami brzegowymi)
+- zapuścić wszystko tak jak było
+
+Sure independence screening
